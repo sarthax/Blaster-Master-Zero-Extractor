@@ -16,6 +16,7 @@ from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageTk, ImageDraw
 
 from .inti import Source, Entry, Preview, decode_preview, discover_sources
+from .inventory import scan_path, write_reports
 
 
 class AssetBrowser(tk.Tk):
@@ -49,6 +50,7 @@ class AssetBrowser(tk.Tk):
         ttk.Label(top, text='INTI ASSET EXPLORER', font=('Segoe UI', 16, 'bold')).pack(side='left', padx=(0, 18))
         ttk.Button(top, text='Open game folder…', command=self.open_folder).pack(side='left', padx=3)
         ttk.Button(top, text='Open archive / resource…', command=self.open_file).pack(side='left', padx=3)
+        ttk.Button(top, text='Export inventory…', command=self.export_inventory).pack(side='right', padx=3)
         ttk.Button(top, text='Export current PNG…', command=self.export_png).pack(side='right', padx=3)
         ttk.Button(top, text='Export raw…', command=self.export_raw).pack(side='right', padx=3)
         ttk.Button(top, text='Extract archive…', command=self.export_archive).pack(side='right', padx=3)
@@ -453,6 +455,45 @@ class AssetBrowser(tk.Tk):
         data = self.entry_bytes if self.entry_bytes is not None else self.source.get_data(self.entry)
         Path(dest).write_bytes(data)
         self.status.set(f'Saved resource: {dest}')
+
+    def export_inventory(self):
+        """Scan all pairs in the chosen folder, even ones the browser skipped."""
+        if self.current_dir is None:
+            messagebox.showinfo('Export inventory', 'Open an archive or game folder first.')
+            return
+        dest = filedialog.asksaveasfilename(
+            title='Save metadata inventory JSON and CSV',
+            defaultextension='.json', initialfile='inti_inventory.json',
+            filetypes=[('JSON report', '*.json')])
+        if not dest:
+            return
+        target = Path(dest)
+        if (target.exists() or target.with_suffix('.csv').exists()) and not messagebox.askyesno(
+                'Overwrite existing reports?', 'The JSON or CSV report already exists. Replace both?'):
+            return
+        scan_target = self.current_dir
+        self.status.set(f'Scanning archive metadata from {scan_target}…')
+
+        def job():
+            report = scan_path(scan_target)
+            paths = write_reports(report, target)
+            return report['summary'], paths
+
+        def done(result, error):
+            if error:
+                self.status.set(f'Inventory failed: {error}')
+                messagebox.showerror('Inventory failed', error)
+                return
+            summary, (json_path, csv_path) = result
+            counts = summary['statuses']
+            failures = counts.get('read_error', 0) + counts.get('parse_error', 0)
+            self.status.set(f"Inventory: {summary['resources']} resources, "
+                            f"{failures} resource errors, {summary['pair_errors']} pair errors")
+            messagebox.showinfo('Inventory completed',
+                                f"Archives: {summary['sources']}\nResources: {summary['resources']}\n"
+                                f"Read/parse errors: {failures}\nPair errors: {summary['pair_errors']}\n\n"
+                                f"JSON: {json_path}\nCSV: {csv_path}")
+        self._background(job, done)
 
     def export_archive(self):
         if not self.source:
