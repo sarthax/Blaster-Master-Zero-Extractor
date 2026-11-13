@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 from concurrent.futures import ThreadPoolExecutor
 import queue
+import struct
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -17,6 +18,10 @@ from PIL import Image, ImageTk, ImageDraw
 
 from .inti import Source, Entry, Preview, decode_preview, discover_sources
 from .inventory import scan_path, write_reports
+from .catalog import (PAGE_SIZE, FILTERS, catalog_from_report, filter_catalog,
+                      catalog_page)
+from tools.decode_irarc_graphics import (sections, parse_iobj, parse_tlpi,
+    decode_bgra, decode_tlpi_texture, read_texture)
 
 
 class AssetBrowser(tk.Tk):
@@ -34,6 +39,15 @@ class AssetBrowser(tk.Tk):
         self.entry_bytes: bytes | None = None
         self.preview_token = 0
         self.gallery_token = 0
+        self.catalog_token = 0
+        self.catalog_scan_token = 0
+        self.load_token = 0
+        self.catalog_items = []
+        self.catalog_filtered = []
+        self.catalog_page_index = 0
+        self.catalog_photos = []
+        self.catalog_slots = {}
+        self.catalog_after = None
         self.photo = None
         self.gallery_photos = []
         self.gallery_cells = {}
@@ -106,10 +120,12 @@ class AssetBrowser(tk.Tk):
         self.frame_tab = ttk.Frame(self.tabs)
         self.details_tab = ttk.Frame(self.tabs)
         self.gallery_tab = ttk.Frame(self.tabs)
+        self.catalog_tab = ttk.Frame(self.tabs)
         self.tabs.add(self.texture_tab, text='Texture / palette')
         self.tabs.add(self.frame_tab, text='Sprite frame (experimental)')
         self.tabs.add(self.details_tab, text='Resource details')
-        self.tabs.add(self.gallery_tab, text='Gallery')
+        self.tabs.add(self.gallery_tab, text='Archive gallery')
+        self.tabs.add(self.catalog_tab, text='All game assets')
 
         texbar = ttk.Frame(self.texture_tab, padding=5)
         texbar.pack(fill='x')
@@ -166,9 +182,221 @@ class AssetBrowser(tk.Tk):
             scrollregion=self.gallery_canvas.bbox('all')))
         self.gallery_canvas.bind('<MouseWheel>', lambda e: self.gallery_canvas.yview_scroll(
             -1 if e.delta > 0 else 1, 'units'))
+        self._build_catalog_tab()
 
         self.status = tk.StringVar(value='Open a Blaster Master Zero data/resarc folder to begin.')
         ttk.Label(self, textvariable=self.status, relief='sunken', anchor='w', padding=6).pack(fill='x', side='bottom')
+
+    def _build_catalog_tab(self):
+        """Cross-archive index with bounded (PAGE_SIZE) thumbnail decoding."""
+        bar = ttk.Frame(self.catalog_tab, padding=(6, 7))
+        bar.pack(fill='x')
+        self.catalog_build = ttk.Button(bar, text='Index game assets', command=self.build_catalog)
+        self.catalog_build.pack(side='left')
+        self.catalog_status = ttk.Label(bar, text='Choose a game folder, then index assets')
+        self.catalog_status.pack(side='left', padx=8)
+        filters = ttk.Frame(self.catalog_tab, padding=(6, 1))
+        filters.pack(fill='x')
+        ttk.Label(filters, text='Find').pack(side='left')
+        self.catalog_query = tk.StringVar()
+        ttk.Entry(filters, textvariable=self.catalog_query, width=18).pack(
+            side='left', fill='x', expand=True, padx=(5, 7))
+        ttk.Label(filters, text='Type').pack(side='left')
+        self.catalog_category = tk.StringVar(value='Graphics')
+        self.catalog_type_select = ttk.Combobox(filters, textvariable=self.catalog_category,
+              values=FILTERS, state='readonly', width=17)
+        self.catalog_type_select.pack(side='left', padx=(5, 0))
+        sourcebar = ttk.Frame(self.catalog_tab, padding=(6, 4))
+        sourcebar.pack(fill='x')
+        ttk.Label(sourcebar, text='Archive').pack(side='left')
+        self.catalog_archive = tk.StringVar(value='All archives')
+        self.catalog_archive_select = ttk.Combobox(sourcebar, textvariable=self.catalog_archive,
+                      values=['All archives'], state='readonly')
+        self.catalog_archive_select.pack(side='left', fill='x', expand=True, padx=7)
+        self.catalog_query.trace_add('write', lambda *_: self._catalog_schedule())
+        self.catalog_type_select.bind('<<ComboboxSelected>>', lambda _e: self._catalog_schedule())
+        self.catalog_archive_select.bind('<<ComboboxSelected>>', lambda _e: self._catalog_schedule())
+        nav = ttk.Frame(self.catalog_tab, padding=(6, 3))
+        nav.pack(fill='x')
+        ttk.Button(nav, text='◀ Previous', command=lambda: self._catalog_change_page(-1)).pack(side='left')
+        ttk.Button(nav, text='Next ▶', command=lambda: self._catalog_change_page(1)).pack(side='right')
+        self.catalog_page_note = ttk.Label(nav, text='No index')
+        self.catalog_page_note.pack(side='left', padx=12)
+        self.catalog_canvas = tk.Canvas(self.catalog_tab, borderwidth=0,
+                        highlightthickness=0, bg='#e9edf2')
+        scroll = ttk.Scrollbar(self.catalog_tab, orient='vertical', command=self.catalog_canvas.yview)
+        self.catalog_canvas.configure(yscrollcommand=scroll.set)
+        scroll.pack(side='right', fill='y')
+        self.catalog_canvas.pack(side='left', fill='both', expand=True)
+        self.catalog_inner = ttk.Frame(self.catalog_canvas, padding=7)
+        self.catalog_canvas.create_window((0, 0), window=self.catalog_inner, anchor='nw')
+        self.catalog_inner.bind('<Configure>', lambda _e: self.catalog_canvas.configure(
+            scrollregion=self.catalog_canvas.bbox('all')))
+        self.catalog_canvas.bind('<MouseWheel>', lambda e: self.catalog_canvas.yview_scroll(
+            -1 if e.delta > 0 else 1, 'units'))
+
+    @staticmethod
+    def _catalog_thumbnail(data):
+        """Decode only the FIRST texture and palette, not every large variant."""
+        sects = sections(data)
+        payloads = {name: body for name, _code, body in sects}
+        if 'IOBJ' in payloads:
+            textures, _frames = parse_iobj(payloads['IOBJ'])
+            if not textures:
+                return None
+            if 'TLPI' in payloads:
+                palettes = parse_tlpi(payloads['TLPI'])
+                if not palettes:
+                    return None
+                image = decode_tlpi_texture(*textures[0], palettes[0])
+            else:
+                image = decode_bgra(*textures[0])
+        elif sects and all(name == 'PIXEL' for name, _code, _body in sects):
+            image = decode_bgra(*read_texture(sects[0][2], 0))
+        else:
+            return None
+        image.thumbnail((105, 88), Image.Resampling.NEAREST)
+        return image
+
+    def _clear_catalog_cards(self):
+        for child in self.catalog_inner.winfo_children():
+            child.destroy()
+        self.catalog_photos.clear()
+        self.catalog_slots.clear()
+        self.catalog_canvas.yview_moveto(0)
+
+    def _catalog_schedule(self, reset_page=True):
+        self.catalog_token += 1
+        if reset_page:
+            self.catalog_page_index = 0
+        if self.catalog_after is not None:
+            self.after_cancel(self.catalog_after)
+        self.catalog_after = self.after(220, self._catalog_render)
+
+    def _catalog_change_page(self, delta):
+        self.catalog_page_index += delta
+        self._catalog_schedule(reset_page=False)
+
+    def build_catalog(self):
+        if not self.sources or self.current_dir is None:
+            messagebox.showinfo('All game assets', 'Open a game folder first.')
+            return
+        self.catalog_scan_token += 1
+        scan_token = self.catalog_scan_token
+        path = self.current_dir
+        sources = list(self.sources)
+        self.catalog_build.configure(state='disabled')
+        self.catalog_status.configure(text='Reading metadata across archives…')
+        self.tabs.select(self.catalog_tab)
+
+        def job():
+            report = scan_path(path)
+            return catalog_from_report(report, sources, path), report['summary']
+
+        def done(result, error):
+            if scan_token != self.catalog_scan_token:
+                return
+            self.catalog_build.configure(state='normal')
+            if error:
+                self.catalog_status.configure(text=f'Catalog scan failed: {error}')
+                messagebox.showerror('Catalog scan failed', error)
+                return
+            items, summary = result
+            self.catalog_items = items
+            source_names = sorted({i.source_path for i in items}, key=str.casefold)
+            self.catalog_archive_select.configure(values=['All archives', *source_names])
+            self.catalog_archive.set('All archives')
+            self.catalog_status.configure(text=(f"{len(items):,} items · {summary['sources']} archives · "
+                         f"{summary['pair_errors']} bad pairs"))
+            self._catalog_schedule()
+        self._background(job, done)
+
+    def _catalog_render(self):
+        self.catalog_after = None
+        token = self.catalog_token
+        self._clear_catalog_cards()
+        if not self.catalog_items:
+            self.catalog_page_note.configure(text='No indexed assets')
+            return
+        category = self.catalog_category.get()
+        archive = self.catalog_archive.get()
+        self.catalog_filtered = filter_catalog(self.catalog_items, self.catalog_query.get(),
+                        category, '' if archive == 'All archives' else archive)
+        shown, self.catalog_page_index, total = catalog_page(
+            self.catalog_filtered, self.catalog_page_index)
+        self.catalog_page_note.configure(text=f'{len(self.catalog_filtered):,} matches · '
+                                         f'page {self.catalog_page_index+1} of {total}')
+        for j, item in enumerate(shown):
+            cell = ttk.Frame(self.catalog_inner, padding=5, relief='ridge')
+            cell.grid(row=j//4, column=j%4, padx=4, pady=4, sticky='n')
+            preview = tk.Label(cell, text='Loading…' if item.graphic else 'No image',
+                               bg='#e2e5e9', width=16, height=6, cursor='hand2')
+            preview.pack()
+            title_label = ttk.Label(cell, text=f'{item.resource_id:08X}', font=('Consolas', 9))
+            title_label.pack()
+            source_label = ttk.Label(cell, text=item.source_path.split('/')[-1][:21],
+                      foreground='#667085', font=('Segoe UI', 8))
+            source_label.pack()
+            label = ' · '.join([item.classification or item.status,
+                                f'{item.frames} frames' if item.frames else
+                                (item.dimensions[0] if item.dimensions else '')])
+            info_label = ttk.Label(cell, text=label[:28], font=('Segoe UI', 8))
+            info_label.pack()
+            self.catalog_slots[(item.source_index, item.ordinal)] = preview
+            for widget in (preview, title_label, source_label, info_label, cell):
+                widget.bind('<Button-1>', lambda _e, row=item: self._catalog_jump(row))
+        self.catalog_status.configure(text=f'Displaying {len(shown)} of {len(self.catalog_filtered):,} matches')
+        if not shown:
+            return
+
+        def job():
+            thumbnails = []
+            for item in shown:
+                if token != self.catalog_token:
+                    break
+                image = None
+                error = ''
+                if item.graphic:
+                    try:
+                        source = self.sources[item.source_index]
+                        entry = source.entries[item.ordinal]
+                        image = self._catalog_thumbnail(source.get_data(entry, 32 * 1024 * 1024))
+                    except (OSError, ValueError, IndexError, OverflowError, MemoryError, struct.error) as exc:
+                        error = str(exc)
+                thumbnails.append((item, image, error))
+            return thumbnails
+
+        def done(result, error):
+            if token != self.catalog_token or error:
+                if error and token == self.catalog_token:
+                    self.catalog_status.configure(text=f'Thumbnails unavailable: {error}')
+                return
+            failed = 0
+            for item, img, reason in result:
+                if not img:
+                    if reason:
+                        failed += 1
+                    continue
+                slot = self.catalog_slots.get((item.source_index, item.ordinal))
+                if slot is not None:
+                    photo = ImageTk.PhotoImage(self._checkerboard(img), master=self)
+                    self.catalog_photos.append(photo)
+                    slot.configure(image=photo, text='', width=105, height=88)
+            if failed:
+                self.catalog_status.configure(text=f'{failed} thumbnail(s) unavailable; raw entries remain accessible')
+        self._background(job, done)
+
+    def _catalog_jump(self, item):
+        """Resolve by source index + ordinal, never by potentially duplicated ID."""
+        self.archives.selection_set(str(item.source_index))
+        self.archives.see(str(item.source_index))
+        self.on_archive()
+        self.tabs.select(self.texture_tab)
+        self.search.set('')
+        target = str(item.ordinal)
+        self.resources.selection_set(target)
+        self.resources.see(target)
+        self.on_resource()
 
     def _make_canvas(self, parent):
         area = ttk.Frame(parent)
@@ -204,6 +432,10 @@ class AssetBrowser(tk.Tk):
     def _close(self):
         self.gallery_token += 1
         self.preview_token += 1
+        self.catalog_token += 1
+        self.catalog_scan_token += 1
+        if self.catalog_after is not None:
+            self.after_cancel(self.catalog_after)
         self.executor.shutdown(wait=False, cancel_futures=True)
         self.destroy()
 
@@ -221,9 +453,23 @@ class AssetBrowser(tk.Tk):
     def load_path(self, path):
         self.status.set(f'Scanning {path}…')
         self.current_dir = path
+        self.load_token += 1
+        load_token = self.load_token
         self.preview_token += 1
         self.gallery_token += 1
-        self._background(lambda: discover_sources(path), self._loaded_sources)
+        self.catalog_scan_token += 1
+        self.catalog_token += 1
+        self.catalog_items = []
+        self.catalog_filtered = []
+        self.catalog_page_index = 0
+        self.catalog_build.configure(state='normal')
+        self.catalog_status.configure(text='Choose Index game assets to catalog this folder')
+        self.catalog_archive_select.configure(values=['All archives'])
+        self.catalog_archive.set('All archives')
+        self._clear_catalog_cards()
+        self._background(lambda: discover_sources(path),
+                         lambda result, error: self._loaded_sources(result, error)
+                         if load_token == self.load_token else None)
 
     def _loaded_sources(self, result, error):
         if error:

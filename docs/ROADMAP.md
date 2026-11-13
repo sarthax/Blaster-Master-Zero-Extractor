@@ -18,7 +18,8 @@ Provide a general-purpose local read-only **game asset explorer**, beginning wit
 
 ## Milestone B — make sprite browsing useful
 
-- [ ] Multi-archive unified sprite gallery with virtualized thumbnails and persistent thumbnail cache.
+- [x] Multi-archive asset catalog with metadata search, type/archive filters and on-demand, **paged** thumbnail decoding (first slice).
+- [ ] True scrolling virtualization and an opt-in persistent thumbnail cache, with fingerprint-based invalidation.
 - [ ] Named/annotated assets, tags, categories, favorites, filtering by dimensions/transparency.
 - [ ] Proper animation timeline with per-frame durations, offsets/layers and playback.
 - [ ] Validate sprite reconstruction against screenshots; fix rotations, flipping, arbitrary quads and subframe transforms.
