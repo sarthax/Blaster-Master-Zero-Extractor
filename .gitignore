@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+# Never publish game data, derived image assets, or extracted resources.
+*.irlst
+*.irarc
+*.17
+*.17.packed
+irarc_extracted/
+irarc_graphics/
+extracted/
+exports/
+assets_local/
+*.zip
+*.png
+*.gif
+*.bmp
+*.webp
