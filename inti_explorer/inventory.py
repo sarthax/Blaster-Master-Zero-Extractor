@@ -117,7 +117,7 @@ def _find_sources(path: Path, recursive: bool) -> tuple[list[Source], list[dict]
             try:
                 return [open_pair(path)], failures
             except (OSError, ValueError) as exc:
-                return [], [{'path': path.name, 'error': str(exc)}]
+                return [], [{'path': path.name, 'error': str(exc).replace(str(path), path.name)}]
         if path.suffix.lower() == '.17':
             return [open_loose(path.parent)], failures
         raise ValueError('Expected a .irlst, .irarc, .17 file, or directory')
@@ -138,7 +138,8 @@ def _find_sources(path: Path, recursive: bool) -> tuple[list[Source], list[dict]
         try:
             sources.append(open_pair(index))
         except (OSError, ValueError) as exc:
-            failures.append({'path': _safe_rel(index, path), 'error': str(exc)})
+            failures.append({'path': _safe_rel(index, path),
+                             'error': str(exc).replace(str(index), _safe_rel(index, path))})
     if not indices and not archives:
         try:
             sources = [open_loose(path, recursive)]
