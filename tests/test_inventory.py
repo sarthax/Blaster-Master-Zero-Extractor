@@ -73,6 +73,7 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(r['summary']['sources'], 2)
             self.assertEqual(r['summary']['resources'], 3)
             self.assertEqual(r['summary']['pair_errors'], 2)
+            self.assertTrue(all(folder not in failure['error'] for failure in r['pair_errors']))
             self.assertEqual(r['summary']['statuses'], {'metadata_ok': 1, 'parse_error': 1, 'unrecognized': 1})
             self.assertEqual(r['summary']['section_signatures'], {'ICDB': 1, 'PIXEL': 1})
             self.assertEqual(r['resources'][0]['resource_sha256'], hashlib.sha256(pixel_resource()).hexdigest())
