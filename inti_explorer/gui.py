@@ -467,8 +467,12 @@ class AssetBrowser(tk.Tk):
         self.catalog_archive_select.configure(values=['All archives'])
         self.catalog_archive.set('All archives')
         self._clear_catalog_cards()
-        self._background(lambda: discover_sources(path),
-                         lambda result, error: self._loaded_sources(result, error)
+        skipped: list = []
+
+        def job():
+            return discover_sources(path, skipped=skipped), skipped
+
+        self._background(job, lambda result, error: self._loaded_sources(result, error)
                          if load_token == self.load_token else None)
 
     def _loaded_sources(self, result, error):
@@ -476,11 +480,17 @@ class AssetBrowser(tk.Tk):
             self.status.set(f'Open failed: {error}')
             messagebox.showerror('Cannot open source', error)
             return
+        result, skipped = result
         self.sources = result
         self.archives.delete(*self.archives.get_children())
         for i, source in enumerate(self.sources):
             self.archives.insert('', 'end', iid=str(i), text=f'{source.label} ({len(source.entries):,})')
-        self.status.set(f'Found {len(self.sources)} archive / loose resource source(s)')
+        note = f'; {len(skipped)} invalid pair(s) skipped' if skipped else ''
+        self.status.set(f'Found {len(self.sources)} archive / loose resource source(s){note}')
+        if skipped:
+            messagebox.showwarning('Invalid archive pairs skipped', chr(10).join(
+                f'{name}: {why}' for name, why in skipped[:10])
+                + (f'{chr(10)}... and {len(skipped) - 10} more' if len(skipped) > 10 else ''))
         if result:
             self.archives.selection_set('0')
             self.on_archive()

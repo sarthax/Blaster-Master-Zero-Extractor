@@ -97,8 +97,13 @@ def open_loose(directory: Path, recursive: bool = False) -> Source:
     return Source(f'Loose: {directory.name}', directory, entries)
 
 
-def discover_sources(path: Path, recursive: bool = True) -> list[Source]:
-    """Prefer original pairs; fall back to already extracted resources."""
+def discover_sources(path: Path, recursive: bool = True,
+                     skipped: Optional[list] = None) -> list[Source]:
+    """Prefer original pairs; fall back to already extracted resources.
+
+    Invalid pairs are skipped; when ``skipped`` is a list they are appended to it
+    as ``(index filename, error)`` so callers can report them.
+    """
     path = Path(path).expanduser().resolve()
     if path.is_file():
         if path.suffix.lower() in {'.irlst', '.irarc'}:
@@ -122,9 +127,10 @@ def discover_sources(path: Path, recursive: bool = True) -> list[Source]:
         for index in indices:
             try:
                 results.append(open_pair(index))
-            except (OSError, ValueError):
+            except (OSError, ValueError) as exc:
                 # A broken pair should not prevent other pairs from being browsed.
-                # The GUI can still surface bad-pair errors when opened directly.
+                if skipped is not None:
+                    skipped.append((index.name, str(exc).replace(str(index), index.name)))
                 continue
         if results:
             return results

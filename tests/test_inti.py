@@ -60,6 +60,16 @@ class ArchiveTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 discover_sources(root)
 
+    def test_skipped_pairs_reported(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root/'good.irarc').write_bytes(b'x')
+            (root/'good.irlst').write_bytes(struct.pack('<I', 0))
+            (root/'bad.irlst').write_bytes(b'garbage')  # no .irarc partner
+            skipped = []
+            self.assertEqual(len(discover_sources(root, skipped=skipped)), 1)
+            self.assertEqual([name for name, _ in skipped], ['bad.irlst'])
+
     def test_no_loose_when_pair_exists(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
