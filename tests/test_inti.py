@@ -89,6 +89,29 @@ class ArchiveTests(unittest.TestCase):
 
 
 class GraphicsTests(unittest.TestCase):
+    def test_unknown_section_matches_inventory_classification(self):
+        from inti_explorer.inventory import inspect_resource
+        body = b'????' + bytes(124)
+        blob = struct.pack('<IIIII', 1, 0, 0, 20, len(body)) + body
+        preview = decode_preview(blob)
+        self.assertEqual(preview.classification, 'UNKNOWN')
+        self.assertEqual(preview.sections, ['UNKNOWN'])
+        self.assertEqual(preview.images, [])
+        self.assertEqual(preview.classification, inspect_resource(blob)['classification'])
+
+    def test_mixed_pixel_and_unknown_keeps_raw_exportable(self):
+        from inti_explorer.inventory import inspect_resource
+        known = pixel_section()[20:]
+        unknown = b'????' + bytes(124)
+        header = struct.pack('<I', 2)
+        header += struct.pack('<IIII', 0, 0, 36, len(known))
+        header += struct.pack('<IIII', 0, 0, 36 + len(known), len(unknown))
+        blob = header + known + unknown
+        preview = decode_preview(blob)
+        self.assertEqual(preview.classification, 'PIXEL+UNKNOWN')
+        self.assertEqual(preview.images, [])
+        self.assertEqual(preview.classification, inspect_resource(blob)['classification'])
+
     def test_unknown_returns_exportable_preview(self):
         p = decode_preview(b'\x00')
         self.assertEqual(p.images, [])

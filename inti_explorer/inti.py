@@ -167,7 +167,22 @@ def decode_preview(data: bytes) -> Preview:
         sects = sections(data)
     except (ValueError, IndexError) as exc:
         return Preview('Unknown / non-texture', [], [], 0, 0, [], str(exc))
-    kinds = [name for name, _, _ in sects]
+    # The graphics parser calls unknown sections PIXEL before validating them.
+    # Match the inventory's classification rather than reporting a false
+    # texture-decode failure for ordinary non-image resources.
+    kinds = []
+    pixel_textures = []
+    for name, _code, body in sects:
+        if name != 'PIXEL':
+            kinds.append(name)
+            continue
+        try:
+            texture = read_texture(body, 0)
+        except ValueError:
+            kinds.append('UNKNOWN')
+        else:
+            kinds.append('PIXEL')
+            pixel_textures.append(texture)
     if 'IOBJ' in kinds:
         obj = next(body for name, _, body in sects if name == 'IOBJ')
         textures, frames = parse_iobj(obj)
@@ -185,7 +200,7 @@ def decode_preview(data: bytes) -> Preview:
         return Preview('IOBJ', images, frames, len(textures), 0, kinds,
                        'Sprite assembly is experimental')
     if kinds and all(k == 'PIXEL' for k in kinds):
-        imgs = [decode_bgra(*read_texture(body, 0)) for _, _, body in sects]
+        imgs = [decode_bgra(*texture) for texture in pixel_textures]
         return Preview('PIXEL', imgs, [], len(imgs), 0, kinds)
     return Preview('+'.join(kinds) if kinds else 'Empty', [], [], 0, 0, kinds,
                    'No supported texture in this resource')
