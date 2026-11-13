@@ -23,8 +23,8 @@ Provide a general-purpose local read-only **game asset explorer**, beginning wit
 - [ ] Proper animation timeline with per-frame durations, offsets/layers and playback.
 - [ ] Validate sprite reconstruction against screenshots; fix rotations, flipping, arbitrary quads and subframe transforms.
 - [ ] Batch export PNG atlas, cropped sprites, frame sequences and contact sheets with manifests.
-- [ ] Scan unknown sections without failing the whole resource; produce a structured JSON signature inventory.
-- [ ] Archive fingerprint/manifest with game/version, sample hashes and decoder confidence.
+- [x] Scan unknown sections without failing the whole resource; produce a structured JSON/CSV signature inventory (first BMZ archive validated; all-game acceptance pending).
+- [x] Archive/resource SHA-256 fingerprint and section manifest; game/version identification and decoder confidence remain research tasks.
 
 ## Milestone C — platform and game adapters
 
