@@ -10,7 +10,7 @@ The project is designed around independently testable formats so more Inti Creat
 2. Download the repository, unzip it, and double-click **`start_windows.bat`**. It installs Pillow if it is not already installed.
 3. Click **Open game folder…** and select your game’s `data\resarc` directory, or open a single `.irlst` or `.irarc` file.
 4. Pick an archive on the left, then a resource ID in the middle. Browse texture/palette variants and experimental sprite frames on the right.
-5. Click **Export current PNG…**, **Export raw…**, or **Extract archive…** to save content. Outputs are saved to paths you choose; originals are not modified.
+5. Click **Export inventory…** to scan the selected game folder and save metadata-only JSON + CSV reports. Use **Export current PNG…**, **Export raw…**, or **Extract archive…** only when you want to save actual assets. Originals are not modified.
 
 Command-line launch on all desktop platforms with Tk support:
 
@@ -32,7 +32,7 @@ python -m inti_explorer
 | PTGT composite frame preview | Experimental: axis-aligned quads, not full animation playback |
 | Thumbnail gallery for selected archive | Implemented, generated on demand |
 | Export decoded PNG / raw decompressed entry / all entries | Implemented; no repacking |
-| Unknown resource inspection | Metadata + raw export; not image-decoded |
+| Unknown resource inspection | Structured section signatures, metadata-only JSON/CSV inventory, raw export |
 | Animation timing, non-axis-aligned geometry, audio, maps, scripts | Research/backlog |
 | Other titles, consoles, and PC releases | **Not yet validated** |
 
@@ -49,6 +49,18 @@ python tools/decode_irarc_graphics.py "C:\Extracted" --recursive --frames -o "C:
 
 The CLI decoder defaults to 24 experimental frame previews per resource; use `--max-frames 0` to render all. It writes a `graphics_manifest.csv` (whereas the GUI works directly from archive bytes).
 
+### Full-game metadata inventory (no sprite PNGs)
+
+Scan the entire game directory, including other archive pairs, without exporting or modifying game assets:
+
+```powershell
+py -3 -m inti_explorer.inventory "C:\Games\Blaster Master Zero\data\resarc" -o "C:\Reports\bmz_inventory.json"
+```
+
+This generates `bmz_inventory.json` and `bmz_inventory.csv` (companion file). In the GUI, choose **Export inventory…** after opening a game folder. The report lists archive SHA-256 hashes, IDs, entry types, compressed/uncompressed sizes, resource SHA-256 hashes, raw section signatures, texture dimensions, palette/frame counts, and failures (including missing archive partners).
+
+A format signature such as `ICDB` or `UNKNOWN` is recorded without guessing the meaning. A previously observed `resarc_cmm` index comprises 227 resources, 226 graphics-metadata-readable and one ICDB unrecognized; other archive pairs have not been tested here. See [docs/INVENTORY.md](docs/INVENTORY.md) for report fields, limits and interpretation.
+
 ## Validation baseline
 
 On the supplied `resarc_cmm.irlst` + `resarc_cmm.irarc` pair (Blaster Master Zero PC), the pure read/decode path inspected **227 resources** with **0 parser failures**, recognized **88 IOBJ**, **135 IOBJ+TLPI**, **3 PIXEL**, and **1 ICDB** resources, and produced **578 texture/palette images**. There are 5,703 PTGT frame records, **not all guaranteed renderable**. This is evidence for that archive only, not a blanket compatibility promise across all game releases. Synthetic tests and a headless Tk startup check accompany the code.
@@ -62,6 +74,7 @@ python -m unittest discover -s tests -v
 ## Architecture and research
 
 - `inti_explorer/inti.py`: read-only source/index/entry API, decoded resource representation, BMZ preview adapter. Independent of GUI.
+- `inti_explorer/inventory.py`: headless game-wide index/section scan and JSON/CSV report writer; does not create PNGs.
 - `inti_explorer/gui.py`: desktop Tkinter browser. Worker threads perform resource reads and image processing; GUI updates stay on the main thread.
 - `tools/extract_irarc.py`: standalone IRARC extractor and custom LZ decoder.
 - `tools/decode_irarc_graphics.py`: standalone resource-section, IOBJ/TLPI and PTGT decoder.
