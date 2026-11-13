@@ -103,9 +103,12 @@ def parse_tlpi(body):
 def decode_tlpi_texture(w, h, fmt, pix, palette):
     if fmt != 4:
         raise ValueError('TLPI image expected 32-bit BGRA container')
-    # Verified on BMZ: B=0, R=index (0..255), G often 255-index, A=transparency.
-    # Older scripts used B & 0x7F, producing wrong images on this title.
-    indices = pix[2::4]
+    # BMZ's palette lookup uses the low seven bits of the RED byte. The high
+    # bit marks opaque/encoded pixels in the observed atlases; e.g. 0x81 uses
+    # TLPI palette slot 1, NOT slot 129. B=0, G is often 255-R, while the
+    # separate pixel alpha still controls transparency. Do not use B as the
+    # index (as in some older decoders).
+    indices = pix[2::4].translate(bytes(range(128)) * 2)
     pixel_alpha = pix[3::4]
     indexed = Image.frombytes('P', (w,h), indices)
     rgb, alpha = palette

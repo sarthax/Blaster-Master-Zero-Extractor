@@ -89,6 +89,27 @@ class ArchiveTests(unittest.TestCase):
 
 
 class GraphicsTests(unittest.TestCase):
+    def test_tlpi_mask_encoded_red_index_high_bit(self):
+        # The BMZ GPU atlas uses R=0x81/0x82 but the TLPI colors live at 1/2.
+        # Upper-half palette entries intentionally contain wrong colors.
+        from tools.decode_irarc_graphics import decode_tlpi_texture
+        colors = bytearray(256 * 3)
+        alpha = bytearray(256)
+        colors[3:6] = bytes((255, 0, 0))     # palette 1: red
+        colors[6:9] = bytes((0, 255, 0))     # palette 2: green
+        colors[129 * 3:129 * 3 + 3] = bytes((0, 0, 255))
+        colors[130 * 3:130 * 3 + 3] = bytes((0, 0, 255))
+        for i in (1, 2, 129, 130):
+            alpha[i] = 255
+        # BGRA: B=0, G=255-R, R=encoded index, A=pixel opacity.
+        pixels = bytes((0, 126, 129, 255, 0, 125, 130, 128, 0, 255, 0, 0))
+        original = pixels
+        image = decode_tlpi_texture(3, 1, 4, pixels, (bytes(colors), bytes(alpha)))
+        self.assertEqual(image.getpixel((0, 0)), (255, 0, 0, 255))
+        self.assertEqual(image.getpixel((1, 0)), (0, 255, 0, 128))
+        self.assertEqual(image.getpixel((2, 0))[3], 0)
+        self.assertEqual(pixels, original)   # raw archive bytes remain unchanged
+
     def test_unknown_section_matches_inventory_classification(self):
         from inti_explorer.inventory import inspect_resource
         body = b'????' + bytes(124)
