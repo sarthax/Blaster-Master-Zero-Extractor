@@ -66,6 +66,7 @@ class AssetBrowser(tk.Tk):
         ttk.Button(top, text='Open archive / resource…', command=self.open_file).pack(side='left', padx=3)
         ttk.Button(top, text='Export inventory…', command=self.export_inventory).pack(side='right', padx=3)
         ttk.Button(top, text='Export current PNG…', command=self.export_png).pack(side='right', padx=3)
+        ttk.Button(top, text='Export BMZ frames…', command=self.export_sprite_sequence).pack(side='right', padx=3)
         ttk.Button(top, text='Export raw…', command=self.export_raw).pack(side='right', padx=3)
         ttk.Button(top, text='Extract archive…', command=self.export_archive).pack(side='right', padx=3)
 
@@ -699,6 +700,31 @@ class AssetBrowser(tk.Tk):
         if dest:
             im.save(dest)
             self.status.set(f'Saved PNG: {dest}')
+
+    def export_sprite_sequence(self):
+        """Export selected resource frames for read-only NES2PCE comparison."""
+        if not self.source or not self.entry or not self.preview or not self.preview.frames:
+            messagebox.showinfo('Export frames', 'Select a resource with sprite frames first.')
+            return
+        folder = filedialog.askdirectory(title='Choose parent folder for exported BMZ frames')
+        if not folder:
+            return
+        from .sprite_bridge import build_package
+        source, entry = self.source, self.entry
+        variant = self._variant_index()
+        dest = Path(folder) / f'BMZ_{source.path.stem}_{entry.resource_id:08X}_i{entry.ordinal:04d}_v{variant}'
+        if dest.exists():
+            messagebox.showerror('Export frames', f'Target already exists. Choose another folder or move the existing package:\n{dest}')
+            return
+        self.status.set(f'Exporting {len(self.preview.frames)} sprite frames…')
+        def done(result, error):
+            if error:
+                messagebox.showerror('Export frames', str(error))
+                self.status.set(f'Sprite frame export failed: {error}')
+            else:
+                self.status.set(f'Exported {len(result["frames"])} frames to {dest}')
+                messagebox.showinfo('Export frames', f'Exported to:\n{dest}\n\nSelect this folder in NES2PCE Sprite Assembly.')
+        self._background(lambda: build_package(source, entry, dest, variant=variant), done)
 
     def export_raw(self):
         if not self.entry or not self.source:
